@@ -292,6 +292,12 @@ class EnergyMLP:
         if not self._trained:
             raise RuntimeError("Model not trained — call train() first")
 
+        if "label" not in segments_df.columns:
+            raise ValueError(
+                "segments_df is missing a 'label' column — the source CSV must contain "
+                "'recommended_action' when has_label=True is passed to aggregate_to_segments"
+            )
+
         df = segments_df.dropna(subset=["label"]).copy()
         df["phase_encoded"] = df["phase_name"].apply(_encode_phase).astype(float)
         df["quality_encoded"] = df["quality_constraint_mode"].apply(_encode_quality).astype(float)

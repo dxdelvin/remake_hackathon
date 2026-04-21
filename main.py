@@ -52,14 +52,17 @@ async def lifespan(app: FastAPI):
             f"({stats['n_train']} train / {stats['n_val']} val segments)"
         )
         # Evaluate on the fully held-out S13 scenario
-        s13_raw = load_training_data(str(TRAINING_DIR), include_patterns=["S13"])
-        s13_segments = aggregate_to_segments(s13_raw, has_label=True)
-        s13_stats = mlp_model.evaluate(s13_segments)
-        print(
-            f"[ZEISS AI] S13 holdout test: accuracy={s13_stats['accuracy']:.2%}  "
-            f"F1={s13_stats['f1_macro']:.2%}  ({s13_stats['n_samples']} segments)\n"
-            f"{s13_stats['report']}"
-        )
+        try:
+            s13_raw = load_training_data(str(TRAINING_DIR), include_patterns=["S13"])
+            s13_segments = aggregate_to_segments(s13_raw, has_label=True)
+            s13_stats = mlp_model.evaluate(s13_segments)
+            print(
+                f"[ZEISS AI] S13 holdout test: accuracy={s13_stats['accuracy']:.2%}  "
+                f"F1={s13_stats['f1_macro']:.2%}  ({s13_stats['n_samples']} segments)\n"
+                f"{s13_stats['report']}"
+            )
+        except Exception as eval_exc:
+            print(f"[ZEISS AI] WARNING — S13 evaluation skipped: {eval_exc}")
     except Exception as exc:
         print(f"[ZEISS AI] WARNING — training failed: {exc}")
         traceback.print_exc()
