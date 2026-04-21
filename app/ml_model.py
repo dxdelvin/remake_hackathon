@@ -149,25 +149,49 @@ class EnergyMLP:
                 df[col] = 0.0
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
-        X = df[FEATURE_COLS].values.astype(float)
-        y_raw = df["label"].astype(str).str.strip()
-
-        # Encode labels
+        # Encode labels before splitting
         self._label_encoder.fit(ACTION_CLASSES)
-        # Map any label not in ACTION_CLASSES to no_action
-        y_raw = y_raw.apply(lambda v: v if v in ACTION_CLASSES else "no_action")
-        y = self._label_encoder.transform(y_raw)
-
-        # Train/val split for reporting (MLP itself uses early_stopping internally)
-        X_train, X_val, y_train, y_val = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y if len(set(y)) > 1 else None
+        df["_y"] = df["label"].astype(str).str.strip().apply(
+            lambda v: v if v in ACTION_CLASSES else "no_action"
         )
+
+        # Per-scenario 70/30 split — each scenario contributes 30% to validation
+        # so the model is never tested on a segment from the same scenario block
+        # it was trained on.  Falls back to random 80/20 if source info is missing.
+        if "_source_file" in df.columns and df["_source_file"].nunique() > 1:
+            train_frames, val_frames = [], []
+            for _, scenario_df in df.groupby("_source_file"):
+                try:
+                    t, v = train_test_split(
+                        scenario_df, test_size=0.30, random_state=42,
+                        stratify=scenario_df["_y"] if scenario_df["_y"].nunique() > 1 else None,
+                    )
+                except ValueError:
+                    t, v = train_test_split(scenario_df, test_size=0.30, random_state=42)
+                train_frames.append(t)
+                val_frames.append(v)
+            train_df = pd.concat(train_frames, ignore_index=True)
+            val_df   = pd.concat(val_frames,   ignore_index=True)
+            split_method = "per-scenario 70/30"
+        else:
+            train_df, val_df = train_test_split(
+                df, test_size=0.20, random_state=42,
+                stratify=df["_y"] if df["_y"].nunique() > 1 else None,
+            )
+            split_method = "random 80/20"
+
+        X_train = train_df[FEATURE_COLS].values.astype(float)
+        X_val   = val_df[FEATURE_COLS].values.astype(float)
+        y_train = self._label_encoder.transform(train_df["_y"])
+        y_val   = self._label_encoder.transform(val_df["_y"])
 
         self._scaler.fit(X_train)
         X_train_s = self._scaler.transform(X_train)
-        X_val_s = self._scaler.transform(X_val)
+        X_val_s   = self._scaler.transform(X_val)
 
-        self._model.fit(X_train_s, y_train)
+        from sklearn.utils.class_weight import compute_sample_weight
+        sample_weights = compute_sample_weight(class_weight="balanced", y=y_train)
+        self._model.fit(X_train_s, y_train, sample_weight=sample_weights)
 
         y_pred = self._model.predict(X_val_s)
         self.accuracy = float(accuracy_score(y_val, y_pred))
@@ -179,6 +203,7 @@ class EnergyMLP:
             "f1_macro": round(self.f1_macro, 4),
             "n_train": len(X_train),
             "n_val": len(X_val),
+            "split_method": split_method,
             "classes": list(self._label_encoder.classes_),
         }
 
@@ -250,6 +275,53 @@ class EnergyMLP:
             "is_energy_spike": is_spike,
             "spike_magnitude_w": round(spike_magnitude, 1),
             "explanation": explanation,
+        }
+
+
+    def evaluate(self, segments_df: pd.DataFrame) -> dict:
+        """
+        Evaluate the trained model on a fully held-out scenario DataFrame.
+        Use this to measure true generalisation to unseen scenarios (e.g. S13).
+
+        Returns
+        -------
+        dict with keys: accuracy, f1_macro, n_samples, report (text)
+        """
+        from sklearn.metrics import accuracy_score, classification_report, f1_score
+
+        if not self._trained:
+            raise RuntimeError("Model not trained — call train() first")
+
+        df = segments_df.dropna(subset=["label"]).copy()
+        df["phase_encoded"] = df["phase_name"].apply(_encode_phase).astype(float)
+        df["quality_encoded"] = df["quality_constraint_mode"].apply(_encode_quality).astype(float)
+
+        for col in FEATURE_COLS:
+            if col not in df.columns:
+                df[col] = 0.0
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+
+        y_raw = df["label"].astype(str).str.strip().apply(
+            lambda v: v if v in ACTION_CLASSES else "no_action"
+        )
+        y_true = self._label_encoder.transform(y_raw)
+
+        X = df[FEATURE_COLS].values.astype(float)
+        X_scaled = self._scaler.transform(X)
+        y_pred = self._model.predict(X_scaled)
+
+        acc = float(accuracy_score(y_true, y_pred))
+        f1  = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+        report = classification_report(
+            y_true, y_pred,
+            target_names=self._label_encoder.classes_,
+            zero_division=0,
+        )
+        return {
+            "accuracy": round(acc, 4),
+            "f1_macro": round(f1, 4),
+            "n_samples": len(y_true),
+            "report": report,
         }
 
 

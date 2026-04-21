@@ -13,10 +13,10 @@ import pandas as pd
 # ── Constants ────────────────────────────────────────────────────────────────
 
 PHASE_BASELINES_W = {
-    "idle": 135.0,
-    "processing": 200.0,
-    "live_view_monitoring": 180.0,
-    "tile_scan_acquisition": 170.0,
+    "idle": 139.3,
+    "processing": 215.7,
+    "live_view_monitoring": 199.1,
+    "tile_scan_acquisition": 219.0,
 }
 
 OPTIMAL_TILE_OVERLAP = {
@@ -43,13 +43,26 @@ def _phase_baseline(phase: str) -> float:
 
 # ── Core API ──────────────────────────────────────────────────────────────────
 
-def load_training_data(training_dir: str) -> pd.DataFrame:
+def load_training_data(
+    training_dir: str,
+    exclude_patterns=None,
+    include_patterns=None,
+) -> pd.DataFrame:
     """
     Load all S*_v4.csv files from training_dir, concatenate them.
     Returns a raw 15-sec telemetry DataFrame with `recommended_action` column.
+
+    Parameters
+    ----------
+    exclude_patterns : list[str] | None — skip files whose basename contains any pattern.
+    include_patterns : list[str] | None — keep only files whose basename contains any pattern.
     """
     pattern = os.path.join(training_dir, "S*_v4.csv")
     files = sorted(glob.glob(pattern))
+    if include_patterns:
+        files = [f for f in files if any(p in os.path.basename(f) for p in include_patterns)]
+    elif exclude_patterns:
+        files = [f for f in files if not any(p in os.path.basename(f) for p in exclude_patterns)]
     if not files:
         raise FileNotFoundError(f"No training files found at {pattern}")
     frames = []
@@ -96,6 +109,27 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
     ):
         if _bare not in df_raw.columns and _flagged in df_raw.columns:
             df_raw[_bare] = df_raw[_flagged]
+    # ─────────────────────────────────────────────────────────────────────────
+
+    # ── Phase inference from experiment_type ─────────────────────────────────
+    # Some CSVs (e.g. S15) omit workflow_phase and only carry experiment_type.
+    # Infer the phase using experiment_type + feature flags, validated against
+    # all S*_v4 training scenarios.
+    if "workflow_phase" not in df_raw.columns and "experiment_type" in df_raw.columns:
+        _exp = df_raw["experiment_type"].astype(str).str.strip().str.lower()
+        _ts = df_raw["tile_scan_enabled_flag"].astype(str).str.lower() == "true" \
+              if "tile_scan_enabled_flag" in df_raw.columns else pd.Series(False, index=df_raw.index)
+        _lv = df_raw["live_view_enabled_flag"].astype(str).str.lower() == "true" \
+              if "live_view_enabled_flag" in df_raw.columns else pd.Series(False, index=df_raw.index)
+
+        _phase_inferred = pd.Series("idle", index=df_raw.index, dtype=str)
+        _phase_inferred[_exp == "reconstruction_only"] = "processing"
+        _phase_inferred[_exp == "tile_scan"] = "processing"
+        _phase_inferred[(_exp == "tile_scan") & _ts] = "tile_scan_acquisition"
+        _phase_inferred[(_exp == "overview_scan") & _lv] = "live_view_monitoring"
+        _phase_inferred[(_exp == "none") & _lv] = "live_view_monitoring"
+
+        df_raw["workflow_phase"] = _phase_inferred
     # ─────────────────────────────────────────────────────────────────────────
 
     group_keys = ["session_id", "workflow_block_id"]
@@ -220,6 +254,9 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
 
         if has_label and "recommended_action" in grp.columns:
             rec["label"] = _mode(grp["recommended_action"])
+
+        if "_source_file" in grp.columns:
+            rec["_source_file"] = grp["_source_file"].iloc[0]
 
         records.append(rec)
 

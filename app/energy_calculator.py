@@ -46,7 +46,20 @@ def calculate_savings(segment: dict, action: str) -> float:
                 live_view_share = 1.0
             elif phase in ("idle", "tile_scan_acquisition"):
                 live_view_share = 0.5
-        savings_wh = LIVE_VIEW_POWER_OVERHEAD_W * live_view_share * duration_sec / 3600.0
+
+        # Base savings from known live-view illumination overhead
+        base_savings_wh = LIVE_VIEW_POWER_OVERHEAD_W * live_view_share * duration_sec / 3600.0
+
+        # If power is anomalously high (spike), the actual recoverable energy is
+        # larger — use power_vs_baseline as the overhead when it exceeds the
+        # hardcoded 18W constant, attributing the share of excess to live view.
+        power_vs_baseline = float(segment.get("power_vs_baseline", 0.0))
+        if power_vs_baseline > LIVE_VIEW_POWER_OVERHEAD_W:
+            spike_savings_wh = power_vs_baseline * live_view_share * duration_sec / 3600.0
+            savings_wh = max(base_savings_wh, spike_savings_wh)
+        else:
+            savings_wh = base_savings_wh
+
         return max(0.0, savings_wh)
 
     if action == "optimize_tile_scan_settings":

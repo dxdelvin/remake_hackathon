@@ -41,15 +41,24 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Train the MLP model from training CSVs before accepting requests."""
-    print("[ZEISS AI] Loading training data…")
+    print("[ZEISS AI] Loading training data (S1–S10; S13 held out as test scenario)…")
     try:
-        raw_df = load_training_data(str(TRAINING_DIR))
+        raw_df = load_training_data(str(TRAINING_DIR), exclude_patterns=["S13"])
         segments_df = aggregate_to_segments(raw_df, has_label=True)
         stats = mlp_model.train(segments_df)
         print(
-            f"[ZEISS AI] MLP trained: accuracy={stats['accuracy']:.2%}  "
-            f"F1={stats['f1_macro']:.2%}  "
+            f"[ZEISS AI] MLP trained ({stats['split_method']}): "
+            f"accuracy={stats['accuracy']:.2%}  F1={stats['f1_macro']:.2%}  "
             f"({stats['n_train']} train / {stats['n_val']} val segments)"
+        )
+        # Evaluate on the fully held-out S13 scenario
+        s13_raw = load_training_data(str(TRAINING_DIR), include_patterns=["S13"])
+        s13_segments = aggregate_to_segments(s13_raw, has_label=True)
+        s13_stats = mlp_model.evaluate(s13_segments)
+        print(
+            f"[ZEISS AI] S13 holdout test: accuracy={s13_stats['accuracy']:.2%}  "
+            f"F1={s13_stats['f1_macro']:.2%}  ({s13_stats['n_samples']} segments)\n"
+            f"{s13_stats['report']}"
         )
     except Exception as exc:
         print(f"[ZEISS AI] WARNING — training failed: {exc}")

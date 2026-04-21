@@ -16,10 +16,10 @@ Architecture:
     Rules must not suppress the ML's ability to surface subtle inefficiencies.
 
 Math example:
-  R3 soft (conf=0.80): rule contributes 0.80×0.28=0.224
-    ML needs ~0.37+ confidence in a different action to override — achievable.
-  R1 hard (conf=0.95): rule contributes 0.95×0.45=0.428
-    ML (0.60 weight) needs >0.71 confidence to override — very hard, as intended.
+  R3 soft (conf=0.80): rule contributes 0.80×0.20=0.160
+    ML needs ~0.23+ confidence in a different action to override — easy.
+  R1 hard (conf=0.95): rule contributes 0.95×0.40=0.380
+    ML (0.70 weight) needs >0.54 confidence to override — achievable but firm.
 """
 
 from typing import Any
@@ -27,10 +27,10 @@ from typing import Any
 from app import rule_engine, ml_model
 from app.energy_calculator import calculate_savings
 
-RULE_WEIGHT_MANDATORY = 0.70  # conf ≥ 0.93 — physics-based certainty, takes precedence over ML
-RULE_WEIGHT_HARD = 0.45   # conf ≥ 0.90 — empirically certain, hard to override
-RULE_WEIGHT_SOFT = 0.28   # conf < 0.90 — suggestive, ML can override with moderate confidence
-MLP_WEIGHT       = 0.60   # ML is the primary classifier
+RULE_WEIGHT_MANDATORY = 0.65  # conf ≥ 0.93 — physics-based certainty, takes precedence over ML
+RULE_WEIGHT_HARD = 0.40   # conf ≥ 0.90 — empirically certain, hard to override
+RULE_WEIGHT_SOFT = 0.20   # conf < 0.90 — suggestive, ML can easily override
+MLP_WEIGHT       = 0.70   # ML is the primary classifier
 
 _ALL_ACTIONS = ["no_action", "optimize_tile_scan_settings", "pause_live_view"]
 
@@ -81,6 +81,26 @@ def analyze_segment(segment: dict) -> dict[str, Any]:
 
     final_action = max(scores, key=lambda a: scores[a])
     combined_confidence = scores[final_action]
+
+    # ── Energy spike hard override ─────────────────────────────────────────
+    # The MLP flags is_energy_spike when power_vs_baseline > 20 W.
+    # If rules + MLP action classifier still landed on no_action despite
+    # a confirmed power spike, that is always wrong — a segment running
+    # above its phase baseline IS wasteful by definition.
+    # Pick the most contextually appropriate corrective action from phase.
+    if ml_result["is_energy_spike"] and final_action == "no_action":
+        spike_magnitude = ml_result["spike_magnitude_w"]
+        _phase = str(segment.get("phase_name", "")).strip().lower()
+        _spike_action = (
+            "optimize_tile_scan_settings"
+            if _phase == "tile_scan_acquisition"
+            else "pause_live_view"
+        )
+        # Confidence scales with magnitude: 20 W → 0.60, 100 W → 0.68, 500 W+ → 0.85
+        spike_confidence = min(0.60 + spike_magnitude / 2500.0, 0.85)
+        scores[_spike_action] = spike_confidence
+        final_action = _spike_action
+        combined_confidence = spike_confidence
 
     # ── Energy savings ────────────────────────────────────────────────────────
     savings_wh = calculate_savings(segment, final_action)

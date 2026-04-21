@@ -58,7 +58,7 @@ def evaluate(segment: dict) -> RuleResult:
     if (
         live_view_share > 0.3
         and inactivity >= INACTIVITY_THRESHOLD_S
-        and monitoring_share < 0.5
+        and monitoring_share < 0.15
         and tile_scan_share < 0.5          # not in an active tile scan
     ):
         idle_min = round(inactivity / 60, 1)
@@ -75,7 +75,7 @@ def evaluate(segment: dict) -> RuleResult:
 
     # ── R2: Idle phase with live view on ─────────────────────────────────────
     # Validated: S9 idle + live_view=True → pause_live_view
-    if phase == "idle" and live_view_share > 0.3:
+    if phase == "idle" and live_view_share > 0.3 and monitoring_share < 0.15:
         lv_pct = round(live_view_share * 100)
         return RuleResult(
             action="pause_live_view",
