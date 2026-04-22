@@ -2,6 +2,10 @@
 
 A FastAPI application that analyzes ZEISS microscope workflow telemetry and recommends energy-saving actions using a hybrid rule-based and machine-learning engine.
 
+<img width="1917" height="907" alt="image" src="https://github.com/user-attachments/assets/256a529d-6ddb-4509-8b0a-652e260cf154" />
+<img width="1874" height="1025" alt="image" src="https://github.com/user-attachments/assets/fa462a18-f050-4cc0-9b35-54e402d6ff23" />
+
+
 ## Features
 
 - MLP classifier trained on labeled workflow telemetry (scenarios S1–S10)
@@ -57,3 +61,4 @@ The server starts at `http://localhost:8000`.
 ## Training Data
 
 Scenario CSVs follow the naming pattern `S{n}_*_v4.csv` and must contain a `recommended_action` column for supervised training. S13 is held out as a test scenario and evaluated separately at startup.
+
