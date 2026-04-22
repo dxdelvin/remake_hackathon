@@ -10,7 +10,6 @@ import os
 
 import pandas as pd
 
-# ── Constants ────────────────────────────────────────────────────────────────
 
 PHASE_BASELINES_W = {
     "idle": 139.3,
@@ -29,7 +28,6 @@ OPTIMAL_TILE_OVERLAP = {
 _AGGREGATED_MARKER_COL = "phase_segment_id"
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _mode(series: pd.Series):
     """Return the most frequent value, or NaN if empty."""
@@ -41,7 +39,6 @@ def _phase_baseline(phase: str) -> float:
     return PHASE_BASELINES_W.get(str(phase).strip().lower(), 170.0)
 
 
-# ── Core API ──────────────────────────────────────────────────────────────────
 
 def load_training_data(
     training_dir: str,
@@ -91,14 +88,9 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
     df_raw = df_raw.copy()
     df_raw.columns = [c.strip().lower().replace(" ", "_") for c in df_raw.columns]
 
-    # ── Column alias normalisation ────────────────────────────────────────────
-    # Raw telemetry CSVs use 'quality_constraint' but the aggregation code
-    # expects 'quality_constraint_mode'.  Create an alias so both schemas work.
     if "quality_constraint_mode" not in df_raw.columns and "quality_constraint" in df_raw.columns:
         df_raw["quality_constraint_mode"] = df_raw["quality_constraint"]
 
-    # Boolean feature columns exist with a '_flag' suffix in all raw CSVs.
-    # Create bare-name aliases so the share() helper finds them correctly.
     for _bare, _flagged in (
         ("live_view_enabled",               "live_view_enabled_flag"),
         ("monitoring_required",             "monitoring_required_flag"),
@@ -109,12 +101,7 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
     ):
         if _bare not in df_raw.columns and _flagged in df_raw.columns:
             df_raw[_bare] = df_raw[_flagged]
-    # ─────────────────────────────────────────────────────────────────────────
 
-    # ── Phase inference from experiment_type ─────────────────────────────────
-    # Some CSVs (e.g. S15) omit workflow_phase and only carry experiment_type.
-    # Infer the phase using experiment_type + feature flags, validated against
-    # all S*_v4 training scenarios.
     if "workflow_phase" not in df_raw.columns and "experiment_type" in df_raw.columns:
         _exp = df_raw["experiment_type"].astype(str).str.strip().str.lower()
         _ts = df_raw["tile_scan_enabled_flag"].astype(str).str.lower() == "true" \
@@ -130,10 +117,8 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
         _phase_inferred[(_exp == "none") & _lv] = "live_view_monitoring"
 
         df_raw["workflow_phase"] = _phase_inferred
-    # ─────────────────────────────────────────────────────────────────────────
 
     group_keys = ["session_id", "workflow_block_id"]
-    # Some files use slightly different casing — be defensive
     available = set(df_raw.columns)
     group_keys = [k for k in group_keys if k in available]
     if not group_keys:
@@ -155,7 +140,6 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
             phase = "idle"
         phase = str(phase).strip().lower()
 
-        # Power metrics column names (defined here, used throughout)
         power_col = "estimated_system_power_w"
         gpu_col = "perf_gpu_power_w"
         energy_col = "estimated_energy_wh_interval"
@@ -184,7 +168,6 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
         overlap_mean = grp[overlap_col].mean() if overlap_col in grp else 0.0
         inflight_mean = grp[inflight_col].mean() if inflight_col in grp else 0.0
 
-        # Inactivity
         if inactivity_col in grp:
             median_inactivity = grp[inactivity_col].median()
         else:
@@ -203,7 +186,6 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
         tile_scan_share = share("tile_scan_enabled")
         exp_running_share = share("experiment_running")
 
-        # Additional numeric metrics
         def col_mean(col):
             return float(grp[col].mean()) if col in grp else 0.0
 
@@ -238,7 +220,6 @@ def aggregate_to_segments(df_raw: pd.DataFrame, has_label: bool = True) -> pd.Da
             "estimated_system_power_w_mean": round(float(avg_power), 2),
             "estimated_energy_wh_interval_sum": round(float(total_energy), 4),
             "power_vs_baseline": round(float(power_vs_baseline), 2),
-            # Extended feature set
             "camera_light_usage_index_pct_mean": round(camera_light_mean, 2),
             "perf_cpu_pct_mean": round(cpu_pct_mean, 2),
             "perf_gpu_usage_pct_mean": round(gpu_usage_mean, 2),

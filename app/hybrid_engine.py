@@ -1,25 +1,6 @@
 """
 hybrid_engine.py
-ML-primary hybrid decision engine.
-
-Architecture:
-  ML is the primary decision maker (MLP_WEIGHT=0.60).
-  Rules act as evidence boosters — they raise the score for their matched action
-  but cannot override a confident ML disagreement for soft rules.
-
-  Tiered rule weights:
-    Hard rules (conf ≥ 0.90):  RULE_WEIGHT_HARD = 0.45 — empirically certain patterns
-    Soft rules (conf < 0.90):   RULE_WEIGHT_SOFT = 0.28 — suggestive, ML can override
-
-  No-rule path:
-    When rules find nothing wrong (returns no_action), we run PURE ML.
-    Rules must not suppress the ML's ability to surface subtle inefficiencies.
-
-Math example:
-  R3 soft (conf=0.80): rule contributes 0.80×0.20=0.160
-    ML needs ~0.23+ confidence in a different action to override — easy.
-  R1 hard (conf=0.95): rule contributes 0.95×0.40=0.380
-    ML (0.70 weight) needs >0.54 confidence to override — achievable but firm.
+ML-primary hybrid decision engine combining rule-based and MLP scores.
 """
 
 from typing import Any
@@ -48,26 +29,16 @@ def analyze_segment(segment: dict) -> dict[str, Any]:
       recommended_action, action_reason, estimated_savings_wh,
       confidence, rule_id, mlp_probabilities, power_vs_baseline
     """
-    # ── Rule engine ───────────────────────────────────────────────────────────
     rule_result = rule_engine.evaluate(segment)
 
-    # ── MLP inference ─────────────────────────────────────────────────────────
     ml_result = ml_model.model.predict(segment)
 
-    # ── Score fusion (ML-primary, tiered rule evidence) ───────────────────────────
     ml_proba = ml_result["probabilities"]
     scores: dict[str, float] = {}
 
     if rule_result.action == "no_action":
-        # Rules found nothing wrong — let ML decide entirely.
-        # Do NOT give the rule's no_action a score boost; that would suppress
-        # the ML from surfacing subtle inefficiencies the rules don't cover.
         scores = {a: ml_proba.get(a, 0.0) for a in _ALL_ACTIONS}
     else:
-        # A rule fired — blend ML + rule evidence.
-        # Mandatory rules (conf ≥ 0.93) encode physics-based certainty; they
-        # override ML even when ML disagrees (e.g. excess tile overlap is always waste).
-        # Hard rules (conf ≥ 0.90) get strong weight; soft rules yield to ML.
         if rule_result.confidence >= 0.93:
             rule_weight = RULE_WEIGHT_MANDATORY
         elif rule_result.confidence >= 0.90:
@@ -82,12 +53,6 @@ def analyze_segment(segment: dict) -> dict[str, Any]:
     final_action = max(scores, key=lambda a: scores[a])
     combined_confidence = scores[final_action]
 
-    # ── Energy spike hard override ─────────────────────────────────────────
-    # The MLP flags is_energy_spike when power_vs_baseline > 20 W.
-    # If rules + MLP action classifier still landed on no_action despite
-    # a confirmed power spike, that is always wrong — a segment running
-    # above its phase baseline IS wasteful by definition.
-    # Pick the most contextually appropriate corrective action from phase.
     if ml_result["is_energy_spike"] and final_action == "no_action":
         spike_magnitude = ml_result["spike_magnitude_w"]
         _phase = str(segment.get("phase_name", "")).strip().lower()
@@ -96,16 +61,13 @@ def analyze_segment(segment: dict) -> dict[str, Any]:
             if _phase == "tile_scan_acquisition"
             else "pause_live_view"
         )
-        # Confidence scales with magnitude: 20 W → 0.60, 100 W → 0.68, 500 W+ → 0.85
         spike_confidence = min(0.60 + spike_magnitude / 2500.0, 0.85)
         scores[_spike_action] = spike_confidence
         final_action = _spike_action
         combined_confidence = spike_confidence
 
-    # ── Energy savings ────────────────────────────────────────────────────────
     savings_wh = calculate_savings(segment, final_action)
 
-    # ── Compose reason string ─────────────────────────────────────────────────
     if final_action == rule_result.action and rule_result.issue_description:
         action_reason = rule_result.issue_description
     elif ml_result["explanation"]:
@@ -113,7 +75,7 @@ def analyze_segment(segment: dict) -> dict[str, Any]:
     else:
         action_reason = f"Pattern matches {final_action.replace('_', ' ')} class"
 
-    # ── Build output record ───────────────────────────────────────────────────
+
     phase = str(segment.get("phase_name", "unknown"))
     segment_id = str(
         segment.get("phase_segment_id",

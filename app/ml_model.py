@@ -20,20 +20,16 @@ from app.data_processor import PHASE_BASELINES_W
 
 # ── Feature list (order matters — must be consistent between train + predict) ─
 FEATURE_COLS = [
-    # Core boolean share features
     "live_view_enabled_share",
     "user_interacting_share",
     "monitoring_required_share",
     "continuous_acquisition_display_share",
     "tile_scan_enabled_share",
     "experiment_running_share",
-    # Inactivity
     "median_seconds_since_last_ui_interaction",
-    # Tile scan geometry
     "tile_overlap_pct_mean",
     "total_tiles_mean",
     "planned_scan_area_mm2_mean",
-    # Power & compute
     "perf_gpu_power_w_mean",
     "perf_gpu_usage_pct_mean",
     "perf_cpu_pct_mean",
@@ -42,10 +38,8 @@ FEATURE_COLS = [
     "perf_incoming_data_mb_s_mean",
     "estimated_system_power_w_mean",
     "power_vs_baseline",
-    # Direct illumination signal (resolves S13 live_view_flag=0 ambiguity)
     "camera_light_usage_index_pct_mean",
     "preview_resolution_pct_mean",
-    # Categorical encodings
     "phase_encoded",
     "quality_encoded",
 ]
@@ -80,9 +74,6 @@ def _build_feature_row(segment: dict) -> np.ndarray:
     row["phase_encoded"] = float(_encode_phase(segment.get("phase_name", "idle")))
     row["quality_encoded"] = float(_encode_quality(segment.get("quality_constraint_mode", "medium")))
 
-    # Phase-context correction: keep the heuristic as a fallback for scenarios
-    # where both live_view_enabled_share AND camera_light_usage_index_pct_mean
-    # are zero but the phase is live_view_monitoring (physically impossible).
     phase_name = str(segment.get("phase_name", "")).strip().lower()
     if row["live_view_enabled_share"] < 0.05 and row["camera_light_usage_index_pct_mean"] < 5.0:
         if phase_name == "live_view_monitoring":
@@ -139,25 +130,20 @@ class EnergyMLP:
         if len(df) < 10:
             raise ValueError(f"Too few labelled training samples: {len(df)}")
 
-        # Build feature matrix
         df["phase_encoded"] = df["phase_name"].apply(_encode_phase).astype(float)
         df["quality_encoded"] = df["quality_constraint_mode"].apply(_encode_quality).astype(float)
 
-        # Fill any missing feature columns with 0
         for col in FEATURE_COLS:
             if col not in df.columns:
                 df[col] = 0.0
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
-        # Encode labels before splitting
         self._label_encoder.fit(ACTION_CLASSES)
         df["_y"] = df["label"].astype(str).str.strip().apply(
             lambda v: v if v in ACTION_CLASSES else "no_action"
         )
 
-        # Per-scenario 70/30 split — each scenario contributes 30% to validation
-        # so the model is never tested on a segment from the same scenario block
-        # it was trained on.  Falls back to random 80/20 if source info is missing.
+        # Per-scenario 70/30 split; falls back to random 80/20 if source info is missing.
         if "_source_file" in df.columns and df["_source_file"].nunique() > 1:
             train_frames, val_frames = [], []
             for _, scenario_df in df.groupby("_source_file"):
@@ -236,7 +222,6 @@ class EnergyMLP:
         classes = self._label_encoder.classes_
         prob_dict = {str(cls): float(p) for cls, p in zip(classes, proba)}
 
-        # Ensure all 3 classes present
         for a in ACTION_CLASSES:
             prob_dict.setdefault(a, 0.0)
 
@@ -247,7 +232,6 @@ class EnergyMLP:
         is_spike = power_vs_baseline > SPIKE_THRESHOLD_W
         spike_magnitude = max(0.0, power_vs_baseline)
 
-        # Build explanation
         phase = str(segment.get("phase_name", "unknown"))
         baseline = PHASE_BASELINES_W.get(phase, 170.0)
         avg_power = float(segment.get("estimated_system_power_w_mean", 0.0))

@@ -31,13 +31,11 @@ from app.data_processor import (
 from app.hybrid_engine import analyze_segment
 from app.ml_model import model as mlp_model
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
 TRAINING_DIR = BASE_DIR / "data" / "training"
 TEMPLATES_DIR = BASE_DIR / "templates"
 
 
-# ── Startup: train MLP from S1-S10 ───────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Train the MLP model from training CSVs before accepting requests."""
@@ -51,7 +49,6 @@ async def lifespan(app: FastAPI):
             f"accuracy={stats['accuracy']:.2%}  F1={stats['f1_macro']:.2%}  "
             f"({stats['n_train']} train / {stats['n_val']} val segments)"
         )
-        # Evaluate on the fully held-out S13 scenario
         try:
             s13_raw = load_training_data(str(TRAINING_DIR), include_patterns=["S13"])
             s13_segments = aggregate_to_segments(s13_raw, has_label=True)
@@ -67,18 +64,14 @@ async def lifespan(app: FastAPI):
         print(f"[ZEISS AI] WARNING — training failed: {exc}")
         traceback.print_exc()
     yield
-    # Nothing to clean up
 
 
-# ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="ZEISS Workflow Energy Intelligence",
     lifespan=lifespan,
 )
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -186,6 +179,5 @@ def _run_analysis(raw_bytes: bytes, scenario_name: str) -> JSONResponse:
     })
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=3000, reload=False)

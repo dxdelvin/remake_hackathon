@@ -1,10 +1,6 @@
 """
 rule_engine.py
-70% component of the hybrid decision engine.
-Rules are empirically validated from raw S1/S2/S4/S9 telemetry.
-
-Key finding: seconds_since_last_ui_interaction >= 120 is the PRIMARY
-driver for pause_live_view — validated directly from raw row sequences.
+Rule-based component of the hybrid decision engine.
 """
 
 from dataclasses import dataclass
@@ -51,10 +47,7 @@ def evaluate(segment: dict) -> RuleResult:
 
     tile_scan_share: float = float(segment.get("tile_scan_enabled_share", 0.0))
 
-    # ── R1: Inactivity-driven live-view pause (primary signal) ───────────────
-    # Validated: S1 rows >=120s inactivity always → pause_live_view
-    # Guard: skip during active tile scans — the correct action there is R4
-    # (overlap optimisation).  Pausing live-view mid-acquisition is wrong.
+    # R1: Inactivity-driven live-view pause
     if (
         live_view_share > 0.3
         and inactivity >= INACTIVITY_THRESHOLD_S
@@ -73,8 +66,7 @@ def evaluate(segment: dict) -> RuleResult:
             rule_id="R1",
         )
 
-    # ── R2: Idle phase with live view on ─────────────────────────────────────
-    # Validated: S9 idle + live_view=True → pause_live_view
+    # R2: Idle phase with live view on
     if phase == "idle" and live_view_share > 0.3 and monitoring_share < 0.15:
         lv_pct = round(live_view_share * 100)
         return RuleResult(
@@ -87,13 +79,7 @@ def evaluate(segment: dict) -> RuleResult:
             rule_id="R2",
         )
 
-    # ── R3: Live-view monitoring with no actual monitoring happening ──────────
-    # Real-world condition: only flag when the user has been genuinely absent
-    # for >=90 s AND true monitoring activity is near-zero.
-    # A user who just stepped away briefly may return; a user absent for 2+ min
-    # with zero monitoring traffic is a clear waste pattern.
-    # Confidence scales with absence duration so the ML can more easily override
-    # brief-absence cases (conf=0.80) vs long-absence cases (conf=0.92).
+    # R3: Live-view monitoring with no actual monitoring happening
     if (
         phase == "live_view_monitoring"
         and monitoring_share < 0.15       # tightened: truly no monitoring traffic
@@ -112,18 +98,11 @@ def evaluate(segment: dict) -> RuleResult:
             rule_id="R3",
         )
 
-    # ── R4: Tile scan with excess overlap ───────────────────────────────────────
-    # Threshold: 2.0% excess — at 1.2W/% this is already measurable over long scans.
-    # Excess overlap wastes energy regardless of user presence.
-    # Higher confidence when user has walked away (inactivity ≥ threshold) because
-    # the scan is running unattended with no opportunity for manual correction.
+    # R4: Tile scan with excess overlap
     if (
         phase == "tile_scan_acquisition"
         and overlap_excess > 2.0
     ):
-        # Physics-based certainty: excess overlap always wastes energy.
-        # 0.93 (mandatory) when inactivity >= 90s (user genuinely absent).
-        # 0.82 (soft) when user is still active — recommend but don't force.
         R4_INACTIVITY_THRESHOLD = 90.0
         conf = 0.93 if inactivity >= R4_INACTIVITY_THRESHOLD else 0.82
         context = (
@@ -142,7 +121,7 @@ def evaluate(segment: dict) -> RuleResult:
             rule_id="R4",
         )
 
-    # ── R5: Processing phase with unused live view ────────────────────────────
+    # R5: Processing phase with unused live view
     if (
         phase == "processing"
         and live_view_share > 0.5
@@ -159,7 +138,7 @@ def evaluate(segment: dict) -> RuleResult:
             rule_id="R5",
         )
 
-    # ── Default: segment is efficient ────────────────────────────────────────
+
     return RuleResult(
         action="no_action",
         confidence=0.50,
